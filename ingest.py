@@ -106,7 +106,6 @@ BAD_CHARACTERS = "bad-characters"
 UNPARSEABLE = "unparseable"
 # Repairs:
 FORMATTING_REMOVED = "formatting-removed"
-FLOAT_FORMAT_REMOVED = "float-format-removed"
 LEADING_ZEROS_RESTORED = "leading-zeros-restored"
 STRIPPED_978_RESTORED = "stripped-978-restored"
 ISBN13_MOVED_FROM_ISBN = "isbn13-moved-from-isbn"
@@ -243,11 +242,6 @@ def check_isbn_column(raw):
     return None, None, reasons_for(s, 10), []
 
 
-def digits_shown(number_text):
-    """Significant digits actually written in a number like '9.78043902348e+12'."""
-    return len(re.split(r"[eE]", number_text)[0].replace(".", "").lstrip("0"))
-
-
 def check_isbn13_column(raw):
     """The `isbn13` column. Returns (isbn13, reasons, repairs, is_float).
     is_float is True when the value was stored as scientific notation or a float."""
@@ -257,23 +251,24 @@ def check_isbn13_column(raw):
     repairs = [repair("isbn13", FORMATTING_REMOVED, raw, s)] if s != raw.strip() else []
 
     if not s.isdigit() and NUMBER_RE.fullmatch(s):
+        # Section 1 row 8: an isbn13 stored as scientific notation or a float is
+        # never recovered from its own digits, even when they happen to form a
+        # valid ISBN-13. It is unusable here: resolve_isbns derives isbn13 from a
+        # valid isbn if the row has one (row 5); otherwise it stays NULL and warned.
+        found = [LOST_PRECISION]
         try:
             n = Decimal(s)
         except InvalidOperation:
-            return None, [BAD_CHARACTERS], [], True
-        if n != n.to_integral_value():
-            return None, [BAD_CHARACTERS], [], True
-        digits = str(int(n))
-        if digits_shown(s) < len(digits):
-            found = [LOST_PRECISION]  # the real digits are permanently lost
+            n = None
+        if n is None or n != n.to_integral_value():
+            found.append(BAD_CHARACTERS)
+        else:
+            digits = str(int(n))
             if len(digits) != 13:
                 found.append(BAD_LENGTH)
             elif not digits.startswith(("978", "979")):
                 found.append(BAD_PREFIX)
-            return None, found, [], True
-        if is_valid_isbn13(digits):  # every digit survived and the checksum proves it
-            return digits, [], repairs + [repair("isbn13", FLOAT_FORMAT_REMOVED, s, digits)], True
-        return None, reasons_for(digits, 13), [], True
+        return None, found, [], True
 
     if is_valid_isbn13(s):
         return s, [], repairs, False
